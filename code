@@ -1,0 +1,70 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    roc_curve, precision_recall_curve,
+    roc_auc_score, classification_report,
+    confusion_matrix
+)
+import matplotlib.pyplot as plt
+
+file_path = r"C:\Users\PisoNet\Documents\survey lung cancer.csv"
+data = pd.read_csv(file_path)
+data.columns = [c.strip().upper().replace(' ', '_') for c in data.columns]
+data['LUNG_CANCER'] = data['LUNG_CANCER'].map({'YES': 1, 'NO': 0})
+data['GENDER'] = LabelEncoder().fit_transform(data['GENDER'])
+
+features = [
+    'GENDER','AGE','SMOKING','YELLOW_FINGERS','ANXIETY','PEER_PRESSURE',
+    'CHRONIC_DISEASE','ALLERGY','WHEEZING','ALCOHOL_CONSUMING',
+    'COUGHING','SHORTNESS_OF_BREATH','CHEST_PAIN','FATIGUE',
+    'SWALLOWING_DIFFICULTY'
+]
+X = data[features]
+y = data['LUNG_CANCER']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, stratify=y, random_state=42
+)
+
+scaler = StandardScaler()
+X_tr = scaler.fit_transform(X_train)
+X_te = scaler.transform(X_test)
+
+df_tr = pd.DataFrame(X_tr, columns=features)
+df_tr['target'] = y_train.values
+maj = df_tr[df_tr['target'] == 1]
+min_ = df_tr[df_tr['target'] == 0]
+maj_down = maj.sample(len(min_), random_state=42)
+df_bal = pd.concat([maj_down, min_])
+X_res = df_bal[features].values
+y_res = df_bal['target'].values
+
+rf = RandomForestClassifier(random_state=42, class_weight='balanced')
+rf.fit(X_res, y_res)
+
+probs = rf.predict_proba(X_te)[:, 1]
+preds = (probs >= 0.5).astype(int)
+
+print("ROC AUC:", roc_auc_score(y_test, probs))
+print(classification_report(y_test, preds))
+print("Confusion Matrix:\n", confusion_matrix(y_test, preds))
+
+fpr, tpr, _ = roc_curve(y_test, probs)
+plt.figure()
+plt.plot(fpr, tpr)
+plt.title('ROC Curve')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.savefig("roc_curve.png")
+plt.close()
+
+precision, recall, _ = precision_recall_curve(y_test, probs)
+plt.figure()
+plt.plot(recall, precision)
+plt.title('Precision-Recall Curve')
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.savefig("precision_recall_curve.png")
+plt.close()
