@@ -1,0 +1,83 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_validate
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, roc_auc_score, roc_curve, precision_recall_curve, confusion_matrix
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+import matplotlib.pyplot as plt
+
+data = pd.read_csv(r"C:\Users\ACER\Documents\survey lung cancer.csv")
+data.columns = [c.strip().upper().replace(' ', '_') for c in data.columns]
+
+data['LUNG_CANCER'] = data['LUNG_CANCER'].map({'YES': 1, 'NO': 0})
+data['GENDER'] = LabelEncoder().fit_transform(data['GENDER'])
+
+target = 'LUNG_CANCER'
+features = [
+    'GENDER','AGE','SMOKING','YELLOW_FINGERS','ANXIETY','PEER_PRESSURE',
+    'CHRONIC_DISEASE','ALLERGY','WHEEZING','ALCOHOL_CONSUMING',
+    'COUGHING','SHORTNESS_OF_BREATH','CHEST_PAIN','FATIGUE',
+    'SWALLOWING_DIFFICULTY'
+]
+
+X = data[features]
+y = data[target]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, stratify=y, random_state=42)
+
+scaler = StandardScaler()
+X_tr = scaler.fit_transform(X_train)
+X_te = scaler.transform(X_test)
+
+df_tr = pd.DataFrame(X_tr, columns=features)
+df_tr['target'] = y_train.values
+# Downsample the larger class to match the smaller
+counts = df_tr['target'].value_counts()
+maj_class = counts.idxmax()
+min_class = counts.idxmin()
+df_maj = df_tr[df_tr['target'] == maj_class]
+df_min = df_tr[df_tr['target'] == min_class]
+df_maj_down = df_maj.sample(len(df_min), random_state=42)
+df_bal = pd.concat([df_maj_down, df_min])
+X_res = df_bal[features].values
+y_res = df_bal['target'].values
+
+model = LogisticRegression(random_state=42)
+param_grid = {
+    'C': [0.01, 0.1, 1, 10],
+    'penalty': ['l1', 'l2'],
+    'solver': ['liblinear', 'saga'],
+    'class_weight': [None, 'balanced'],
+    'max_iter': [100, 250, 500]
+}
+
+grid = GridSearchCV(model, param_grid, cv=5, scoring='roc_auc', n_jobs=-1)
+grid.fit(X_res, y_res)
+best = grid.best_estimator_
+
+cv_results = cross_validate(best, X_res, y_res, cv=5, scoring=['accuracy','precision','recall','f1','roc_auc'])
+
+y_pred = best.predict(X_te)
+y_prob = best.predict_proba(X_te)[:, 1]
+
+print(grid.best_params_)
+print("ROC AUC on test:", roc_auc_score(y_test, y_prob))
+print(classification_report(y_test, y_pred))
+print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred))
+
+fpr, tpr, _ = roc_curve(y_test, y_prob)
+plt.figure()
+plt.plot(fpr, tpr)
+plt.title('ROC Curve')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.savefig("roc_curve.png")
+plt.close()
+
+precision, recall, _ = precision_recall_curve(y_test, y_prob)
+plt.figure()
+plt.plot(recall, precision)
+plt.title('Precision-Recall Curve')
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.savefig("precision_recall_curve.png")
+plt.close()
