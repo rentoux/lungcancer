@@ -1,0 +1,57 @@
+import pandas as pd
+from pathlib import Path
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import classification_report, confusion_matrix, precision_recall_curve
+from imblearn.pipeline import Pipeline
+from imblearn.combine import SMOTETomek
+import numpy as np
+
+df = pd.read_csv(Path(r"C:\Users\WINDOWS 11\OneDrive\Documents\survey-lung-cancer.csv"))
+df.columns = [c.strip().upper().replace(' ', '_') for c in df.columns]
+df['LUNG_CANCER'] = df['LUNG_CANCER'].map({'YES': 1, 'NO': 0})
+df['GENDER'] = LabelEncoder().fit_transform(df['GENDER'])
+
+features = [
+    'GENDER','AGE','SMOKING','YELLOW_FINGERS','ANXIETY','PEER_PRESSURE',
+    'CHRONIC_DISEASE','ALLERGY','WHEEZING','ALCOHOL_CONSUMING',
+    'COUGHING','SHORTNESS_OF_BREATH','CHEST_PAIN','FATIGUE',
+    'SWALLOWING_DIFFICULTY'
+]
+X = df[features]
+y = df['LUNG_CANCER']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, stratify=y, random_state=42)
+
+pipe = Pipeline([
+    ('scale', StandardScaler()),
+    ('smt', SMOTETomek(random_state=42)),
+    ('knn', KNeighborsClassifier())
+])
+
+param_grid = {
+    'knn__n_neighbors': list(range(1, 31)),
+    'knn__weights': ['uniform', 'distance'],
+    'knn__p': [1, 2]
+}
+
+grid = GridSearchCV(pipe, param_grid, cv=5, scoring='recall', n_jobs=-1, verbose=2)
+grid.fit(X_train, y_train)
+
+best = grid.best_estimator_
+y_prob = best.predict_proba(X_test)[:, 1]
+y_pred_default = (y_prob >= 0.5).astype(int)
+
+print(grid.best_params_)
+print(confusion_matrix(y_test, y_pred_default))
+print(classification_report(y_test, y_pred_default))
+
+prec, rec, thr = precision_recall_curve(y_test, y_prob)
+f1 = 2 * prec * rec / (prec + rec + 1e-10)
+best_thr = thr[np.argmax(f1)]
+y_pred_thr = (y_prob >= best_thr).astype(int)
+
+print(f'Optimal threshold: {best_thr:.3f}')
+print(confusion_matrix(y_test, y_pred_thr))
+print(classification_report(y_test, y_pred_thr))
