@@ -1,0 +1,86 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+    roc_curve,
+    precision_recall_curve,
+    f1_score
+)
+from imblearn.over_sampling import SMOTE
+from sklearn.calibration import CalibratedClassifierCV
+
+# Load and preprocess data
+df = pd.read_csv("survey-lung-cancer.csv")
+df.columns = [c.strip().upper().replace(' ', '_') for c in df.columns]
+df['LUNG_CANCER'] = df['LUNG_CANCER'].map({'YES': 1, 'NO': 0})
+df['GENDER'] = df['GENDER'].map({'M': 1, 'F': 0})
+
+features = [
+    'GENDER', 'AGE', 'SMOKING', 'YELLOW_FINGERS', 'ANXIETY',
+    'PEER_PRESSURE', 'CHRONIC_DISEASE', 'ALLERGY', 'WHEEZING',
+    'ALCOHOL_CONSUMING', 'COUGHING', 'SHORTNESS_OF_BREATH',
+    'CHEST_PAIN', 'FATIGUE', 'SWALLOWING_DIFFICULTY'
+]
+
+X = df[features]
+y = df['LUNG_CANCER']
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, random_state=42, stratify=y
+)
+
+# SMOTE
+sm = SMOTE(random_state=42)
+X_train_sm, y_train_sm = sm.fit_resample(X_train, y_train)
+
+# CART model with fixed best parameters
+best_params = {
+    'criterion': 'entropy',
+    'min_samples_leaf': 10,
+    'ccp_alpha': 0.004774668151861136
+}
+clf = DecisionTreeClassifier(**best_params, random_state=42)
+clf.fit(X_train_sm, y_train_sm)
+
+# Probability calibration
+calibrated_clf = CalibratedClassifierCV(clf, method='sigmoid', cv=5)
+calibrated_clf.fit(X_train_sm, y_train_sm)
+
+# Predictions
+y_prob = calibrated_clf.predict_proba(X_test)[:, 1]
+y_pred = (y_prob >= 0.78).astype(int)  # Using optimal ROC threshold
+
+# Evaluation
+print("Confusion Matrix:", confusion_matrix(y_test, y_pred))
+print("Classification Report:")
+print(classification_report(y_test, y_pred))
+print("ROC AUC:", roc_auc_score(y_test, y_prob))
+print("F1 Score:", f1_score(y_test, y_pred))
+
+# ROC Curve
+fpr, tpr, _ = roc_curve(y_test, y_prob)
+plt.figure()
+plt.plot(fpr, tpr)
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve')
+plt.grid()
+plt.show()
+
+# PR Curve
+precision, recall, _ = precision_recall_curve(y_test, y_prob)
+plt.figure()
+plt.plot(recall, precision)
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.title('Precision-Recall Curve')
+plt.grid()
+plt.show()
+
+
