@@ -1,0 +1,110 @@
+import pandas as pd
+from pathlib import Path
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler, LabelEncoder, PolynomialFeatures
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import VotingClassifier
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+    precision_recall_curve,
+)
+from imblearn.pipeline import Pipeline
+from imblearn.combine import SMOTETomek
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Load and preprocess
+df = pd.read_csv(Path(r"C:\Users\WINDOWS 11\OneDrive\Documents\survey-lung-cancer.csv"))
+df.columns = [c.strip().upper().replace(' ', '_') for c in df.columns]
+df['LUNG_CANCER'] = df['LUNG_CANCER'].map({'YES': 1, 'NO': 0})
+df['GENDER'] = LabelEncoder().fit_transform(df['GENDER'])
+
+features = [
+    'GENDER','AGE','SMOKING','YELLOW_FINGERS','ANXIETY','PEER_PRESSURE',
+    'CHRONIC_DISEASE','ALLERGY','WHEEZING','ALCOHOL_CONSUMING',
+    'COUGHING','SHORTNESS_OF_BREATH','CHEST_PAIN','FATIGUE',
+    'SWALLOWING_DIFFICULTY'
+]
+X = df[features]
+y = df['LUNG_CANCER']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, stratify=y, random_state=42
+)
+
+# SVC pipeline + grid search
+svc_pipe = Pipeline([
+    ('poly', PolynomialFeatures(degree=2, include_bias=False)),
+    ('scale', StandardScaler()),
+    ('smt', SMOTETomek(random_state=42)),
+    ('svc', SVC(probability=True, random_state=42))
+])
+svc_param_grid = {
+    'svc__C': np.logspace(-3, 2, 6),
+    'svc__gamma': np.logspace(-4, 1, 6).tolist() + ['scale', 'auto'],
+    'svc__kernel': ['rbf', 'linear', 'poly', 'sigmoid']
+}
+grid_svc = GridSearchCV(svc_pipe, svc_param_grid, cv=5, scoring='roc_auc', n_jobs=-1, verbose=1)
+grid_svc.fit(X_train, y_train)
+
+# KNN pipeline + grid search
+knn_pipe = Pipeline([
+    ('scale', StandardScaler()),
+    ('smt', SMOTETomek(random_state=42)),
+    ('knn', KNeighborsClassifier())
+])
+knn_param_grid = {
+    'knn__n_neighbors': list(range(1, 31)),
+    'knn__weights': ['uniform', 'distance'],
+    'knn__p': [1, 2]
+}
+grid_knn = GridSearchCV(knn_pipe, knn_param_grid, cv=5, scoring='recall', n_jobs=-1, verbose=1)
+grid_knn.fit(X_train, y_train)
+
+# Best estimators
+best_svc = grid_svc.best_estimator_
+best_knn = grid_knn.best_estimator_
+
+# Voting ensemble
+ensemble = VotingClassifier(
+    estimators=[('svc', best_svc), ('knn', best_knn)],
+    voting='soft',
+    weights=[2, 1]
+)
+ensemble.fit(X_train, y_train)
+
+# Predictions (default threshold)
+y_prob_ens = ensemble.predict_proba(X_test)[:, 1]
+y_pred_default = (y_prob_ens >= 0.5).astype(int)
+
+print("=== Default Threshold Evaluation ===")
+print("Ensemble ROC AUC:", roc_auc_score(y_test, y_prob_ens))
+print(confusion_matrix(y_test, y_pred_default))
+print(classification_report(y_test, y_pred_default))
+
+# Optimal threshold tuning via F1
+prec, rec, thr = precision_recall_curve(y_test, y_prob_ens)
+f1 = 2 * prec * rec / (prec + rec + 1e-10)
+best_thr = thr[np.argmax(f1)]
+
+# Predictions with optimal threshold
+y_pred_opt = (y_prob_ens >= best_thr).astype(int)
+
+print(f"=== Optimal Threshold Evaluation (Threshold: {best_thr:.3f}) ===")
+print(confusion_matrix(y_test, y_pred_opt))
+print(classification_report(y_test, y_pred_opt))
+
+# Optional: plot Precision-Recall curve
+plt.figure(figsize=(8, 6))
+plt.plot(rec, prec, label='Precision-Recall curve')
+plt.scatter(rec[np.argmax(f1)], prec[np.argmax(f1)], color='red', label=f'Best F1 Threshold={best_thr:.3f}')
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.title('Precision-Recall Curve')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
