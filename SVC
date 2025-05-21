@@ -1,0 +1,89 @@
+import pandas as pd
+from pathlib import Path
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler, LabelEncoder, PolynomialFeatures
+from sklearn.svm import SVC
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve, precision_recall_curve
+from imblearn.pipeline import Pipeline
+from imblearn.combine import SMOTETomek
+import numpy as np
+import matplotlib.pyplot as plt
+
+df = pd.read_csv(Path(r"C:\Users\WINDOWS 11\OneDrive\Documents\survey-lung-cancer.csv"))
+df.columns = [c.strip().upper().replace(' ', '_') for c in df.columns]
+df['LUNG_CANCER'] = df['LUNG_CANCER'].map({'YES': 1, 'NO': 0})
+df['GENDER'] = LabelEncoder().fit_transform(df['GENDER'])
+
+features = [
+    'GENDER','AGE','SMOKING','YELLOW_FINGERS','ANXIETY','PEER_PRESSURE',
+    'CHRONIC_DISEASE','ALLERGY','WHEEZING','ALCOHOL_CONSUMING',
+    'COUGHING','SHORTNESS_OF_BREATH','CHEST_PAIN','FATIGUE',
+    'SWALLOWING_DIFFICULTY'
+]
+X = df[features]
+y = df['LUNG_CANCER']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, stratify=y, random_state=42)
+
+pipe = Pipeline([
+    ('poly', PolynomialFeatures(degree=2, include_bias=False)),
+    ('scale', StandardScaler()),
+    ('smt', SMOTETomek(random_state=42)),
+    ('svc', SVC(probability=True, random_state=42))
+])
+
+param_grid = {
+    'svc__C':     np.logspace(-3, 2, 6),
+    'svc__gamma': np.logspace(-4, 1, 6).tolist() + ['scale','auto'],
+    'svc__kernel':['rbf','linear','poly','sigmoid']
+}
+
+grid = GridSearchCV(pipe, param_grid, cv=5, scoring='roc_auc', n_jobs=-1, verbose=1)
+grid.fit(X_train, y_train)
+
+best = grid.best_estimator_
+y_prob = best.predict_proba(X_test)[:,1]
+y_pred_default = best.predict(X_test)
+
+auc = roc_auc_score(y_test, y_prob)
+fpr, tpr, _ = roc_curve(y_test, y_prob)
+
+prob0 = 1 - y_prob
+prec0, rec0, thr0 = precision_recall_curve((y_test==0).astype(int), prob0)
+f1_0 = 2 * (prec0 * rec0) / (prec0 + rec0 + 1e-10)
+idx = np.argmax(f1_0)
+best_thr0 = thr0[idx]
+
+y_pred_thr = np.where(prob0 >= best_thr0, 0, 1)
+
+print(grid.best_params_)
+print("Default Threshold Confusion Matrix:")
+print(confusion_matrix(y_test, y_pred_default))
+print("Default Classification Report:")
+print(classification_report(y_test, y_pred_default))
+print(f"ROC AUC: {auc:.3f}")
+
+print(f"\nOptimal Threshold for No-Cancer: {best_thr0:.3f}")
+print("Threshold-Tuned Confusion Matrix:")
+print(confusion_matrix(y_test, y_pred_thr))
+print("Threshold-Tuned Classification Report:")
+print(classification_report(y_test, y_pred_thr))
+
+plt.figure()
+plt.plot(fpr, tpr)
+plt.title('SVC ROC Curve')
+plt.xlabel('FPR')
+plt.ylabel('TPR')
+plt.show()
+
+plt.figure()
+plt.plot(rec0, prec0)
+plt.title('No-Cancer Precision-Recall Curve')
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.show()
+
+
+
+
+
